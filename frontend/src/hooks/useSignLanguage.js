@@ -1,9 +1,11 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Hands, HAND_CONNECTIONS } from '@mediapipe/hands';
-import { Camera } from '@mediapipe/camera_utils';
-import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
 import { recognizeGesture } from '../utils/gestureLogic';
+
+/* 
+  NOTE: We are using the MediaPipe scripts loaded in index.html via CDN 
+  to avoid Vite/NPM bundling issues like "process is not a function".
+*/
 
 export const useSignLanguage = (videoRef, canvasRef) => {
     const [gesture, setGesture] = useState(null);
@@ -48,21 +50,20 @@ export const useSignLanguage = (videoRef, canvasRef) => {
         canvasCtx.save();
         canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // VISUAL TEST: Small pulse indicator to prove canvas is rendering
+        // Pulse indicator
         canvasCtx.fillStyle = '#10b981';
         canvasCtx.beginPath();
         canvasCtx.arc(30, 30, (frameCount.current % 10) + 5, 0, Math.PI * 2);
         canvasCtx.fill();
 
-        // With selfieMode: true, MediaPipe mirrors the landmarks.
-        // If the video is ALSO mirrored via CSS (scaleX(-1)), then we DON'T need 
-        // to mirror the canvas context because the landmarks already match the display coordinates.
-
         if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-            for (const landmarks of results.multiHandLandmarks) {
-                drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS,
-                    { color: '#10b981', lineWidth: 4 });
-                drawLandmarks(canvasCtx, landmarks, { color: '#ffffff', lineWidth: 1, radius: 2 });
+            // Use window.drawConnectors and window.drawLandmarks from drawing_utils.js
+            if (window.drawConnectors && window.drawLandmarks && window.HAND_CONNECTIONS) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    window.drawConnectors(canvasCtx, landmarks, window.HAND_CONNECTIONS,
+                        { color: '#10b981', lineWidth: 4 });
+                    window.drawLandmarks(canvasCtx, landmarks, { color: '#ffffff', lineWidth: 1, radius: 2 });
+                }
             }
 
             const landmarks = results.multiHandLandmarks[0];
@@ -108,12 +109,20 @@ export const useSignLanguage = (videoRef, canvasRef) => {
 
         if (!isCameraActive) return;
 
-        console.log("Starting MediaPipe v0.10.13...");
+        // Check if scripts are loaded
+        if (!window.Hands || !window.Camera) {
+            console.error("MediaPipe scripts not loaded from CDN!");
+            setError("AI engine files failed to load. Please check your internet connection.");
+            setLoading(false);
+            return;
+        }
 
         const init = async () => {
             try {
-                hands = new Hands({
-                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.10.13/${file}`,
+                console.log("Initializing MediaPipe Hands (CDN version)...");
+
+                hands = new window.Hands({
+                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
                 });
 
                 hands.setOptions({
@@ -127,9 +136,20 @@ export const useSignLanguage = (videoRef, canvasRef) => {
                 hands.onResults(processResults);
 
                 if (videoRef.current) {
-                    camera = new Camera(videoRef.current, {
+                    camera = new window.Camera(videoRef.current, {
                         onFrame: async () => {
-                            if (hands) await hands.process({ image: videoRef.current });
+                            if (hands) {
+                                // The CDN version sometimes uses .send() or .process() depending on build
+                                try {
+                                    await hands.send({ image: videoRef.current });
+                                } catch (e) {
+                                    try {
+                                        await hands.process({ image: videoRef.current });
+                                    } catch (e2) {
+                                        console.error("Critical: Camera hand processing failed.", e2);
+                                    }
+                                }
+                            }
                         },
                         width: 1280,
                         height: 720,
@@ -137,7 +157,7 @@ export const useSignLanguage = (videoRef, canvasRef) => {
                     await camera.start();
                 }
             } catch (err) {
-                console.error("Init Error:", err);
+                console.error("Initialization Error:", err);
                 setError(err.message);
             }
         };
@@ -155,7 +175,18 @@ export const useSignLanguage = (videoRef, canvasRef) => {
         setIsCameraActive(!isCameraActive);
     };
 
-    const clearSentence = () => setSentence([]);
+    const clearSentence = () => {
+        setSentence([]);
+        lastWord.current = null;
+    };
 
-    return { gesture, sentence, isCameraActive, toggleCamera, clearSentence, loading, error };
+    return {
+        gesture,
+        sentence,
+        isCameraActive,
+        toggleCamera,
+        clearSentence,
+        loading,
+        error
+    };
 };
