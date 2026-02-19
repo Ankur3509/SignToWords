@@ -12,7 +12,6 @@ export const useSignLanguage = (videoRef, canvasRef) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
-    // Refs for tracking state
     const lastSpokenTime = useRef(0);
     const lastWord = useRef(null);
     const silenceCounter = useRef(0);
@@ -32,13 +31,16 @@ export const useSignLanguage = (videoRef, canvasRef) => {
     };
 
     const processResults = useCallback((results) => {
-        if (loading) setLoading(false);
+        // If this function is called, the AI engine is definitely working!
+        if (loading) {
+            console.log("MediaPipe results received! AI is online.");
+            setLoading(false);
+        }
 
         const canvas = canvasRef.current;
-        if (!canvas || !videoRef.current) return;
-
-        // Auto-fix canvas resolution
         const video = videoRef.current;
+        if (!canvas || !video) return;
+
         if (video.videoWidth > 0 && (canvas.width !== video.videoWidth)) {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
@@ -48,57 +50,53 @@ export const useSignLanguage = (videoRef, canvasRef) => {
         canvasCtx.save();
         canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // MIRROR FIX: The video is mirrored in CSS, so we must mirror the canvas context
-        // This makes sure the green skeleton aligns with the hand on screen
+        // Mirror the drawing to match the mirrored video
         canvasCtx.translate(canvas.width, 0);
         canvasCtx.scale(-1, 1);
 
-        // Draw landmarks for VISUAL FEEDBACK
         if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
             for (const landmarks of results.multiHandLandmarks) {
                 drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS,
                     { color: '#10b981', lineWidth: 4 });
                 drawLandmarks(canvasCtx, landmarks, { color: '#ffffff', lineWidth: 1, radius: 2 });
             }
-        }
 
-        let currentPrediction = null;
-
-        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
             const landmarks = results.multiHandLandmarks[0];
-            currentPrediction = recognizeGesture(landmarks);
-            silenceCounter.current = 0;
+            const currentPrediction = recognizeGesture(landmarks);
+
+            if (currentPrediction) {
+                silenceCounter.current = 0;
+                buffer.current.push(currentPrediction);
+                if (buffer.current.length > bufferSize) buffer.current.shift();
+
+                if (buffer.current.length >= bufferSize / 2) {
+                    const counts = {};
+                    buffer.current.forEach(w => counts[w] = (counts[w] || 0) + 1);
+                    const stabilized = Object.keys(counts).reduce((a, b) => counts[a] > counts[b] ? a : b);
+
+                    setGesture(stabilized);
+
+                    const currentTime = Date.now() / 1000;
+                    const timePassed = (currentTime - lastSpokenTime.current) > cooldownSeconds;
+                    const isNewWord = stabilized !== lastWord.current;
+
+                    if (timePassed && (isNewWord || lastWord.current === null)) {
+                        lastWord.current = stabilized;
+                        lastSpokenTime.current = currentTime;
+                        speak(stabilized);
+                        setSentence(prev => [...prev, stabilized]);
+                    }
+                }
+            } else {
+                setGesture(null);
+            }
         } else {
+            // No hands detected
+            setGesture(null);
             silenceCounter.current += 1;
             if (silenceCounter.current > silenceThreshold) {
                 lastWord.current = null;
             }
-        }
-
-        if (currentPrediction) {
-            buffer.current.push(currentPrediction);
-            if (buffer.current.length > bufferSize) buffer.current.shift();
-
-            if (buffer.current.length >= bufferSize / 2) {
-                const counts = {};
-                buffer.current.forEach(w => counts[w] = (counts[w] || 0) + 1);
-                const stabilized = Object.keys(counts).reduce((a, b) => counts[a] > counts[b] ? a : b);
-
-                setGesture(stabilized);
-
-                const currentTime = Date.now() / 1000;
-                const timePassed = (currentTime - lastSpokenTime.current) > cooldownSeconds;
-                const isNewWord = stabilized !== lastWord.current;
-
-                if (timePassed && (isNewWord || lastWord.current === null)) {
-                    lastWord.current = stabilized;
-                    lastSpokenTime.current = currentTime;
-                    speak(stabilized);
-                    setSentence(prev => [...prev, stabilized]);
-                }
-            }
-        } else {
-            setGesture(null);
         }
 
         canvasCtx.restore();
@@ -108,39 +106,68 @@ export const useSignLanguage = (videoRef, canvasRef) => {
         let hands = null;
         let camera = null;
 
+        if (!isCameraActive) {
+            setLoading(true); // Reset loading state for next time
+            return;
+        }
+
         const initTracking = async () => {
             try {
+                console.log("Loading AI models...");
                 hands = new Hands({
-                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+                    locateFile: (file) => {
+                        // Use a specific version to avoid flaky CDN redirects
+                        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`;
+                    },
                 });
 
-                // modelComplexity 0 is faster and works better on many webcams
                 hands.setOptions({
                     maxNumHands: 1,
                     modelComplexity: 0,
                     minDetectionConfidence: 0.5,
                     minTrackingConfidence: 0.5,
+                    selfieMode: true // This matches our mirrored video feed
                 });
 
                 hands.onResults(processResults);
 
-                if (videoRef.current && isCameraActive) {
-                    camera = new Camera(videoRef.current, {
-                        onFrame: async () => {
-                            if (hands) {
-                                await hands.process({ image: videoRef.current });
-                            }
-                        },
-                        width: 1280,
-                        height: 720,
-                    });
+                // Wait for video to be ready before starting camera
+                const startCamera = async () => {
+                    if (videoRef.current) {
+                        camera = new Camera(videoRef.current, {
+                            onFrame: async () => {
+                                if (hands && isCameraActive) {
+                                    try {
+                                        await hands.process({ image: videoRef.current });
+                                    } catch (e) {
+                                        console.error("Frame processing error:", e);
+                                    }
+                                }
+                            },
+                            width: 1280,
+                            height: 720,
+                        });
+                        await camera.start();
+                        console.log("Camera started");
+                    }
+                };
 
-                    await camera.start();
-                    console.log("Tracking engine started");
-                }
+                startCamera();
+
+                // Safety timeout: If AI doesn't resolve in 15 seconds, show an error
+                const timeout = setTimeout(() => {
+                    if (loading && isCameraActive) {
+                        setError("AI initialization timed out. Please check your internet connection or try a different browser.");
+                        setLoading(false);
+                    }
+                }, 15000);
+
+                return () => clearTimeout(timeout);
+
             } catch (err) {
-                console.error("Tracking error:", err);
-                setError(err.message);
+                console.error("AI engine failed:", err);
+                setError("Failed to load AI engine: " + err.message);
+                setLoading(false);
             }
         };
 
