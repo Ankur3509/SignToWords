@@ -2,7 +2,7 @@
 import React, { useRef } from 'react';
 import './App.css';
 import { useSignLanguage } from './hooks/useSignLanguage';
-import { Camera, CameraOff, Trash2, Languages, Volume2, Info } from 'lucide-react';
+import { Camera, CameraOff, Trash2, Languages, Volume2, Info, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 function App() {
@@ -15,7 +15,8 @@ function App() {
     isCameraActive,
     toggleCamera,
     clearSentence,
-    loading
+    loading,
+    error
   } = useSignLanguage(videoRef, canvasRef);
 
   return (
@@ -35,11 +36,21 @@ function App() {
         <section className="camera-section">
           {!isCameraActive ? (
             <div className="camera-placeholder">
-              <CameraOff className="icon-large" />
-              <p>Camera is paused. Start tracking to begin.</p>
+              {error ? (
+                <div style={{ color: '#ef4444', marginBottom: '1rem', textAlign: 'center' }}>
+                  <AlertCircle size={48} style={{ margin: '0 auto 1rem' }} />
+                  <p><strong>Tracking Error:</strong> {error}</p>
+                  <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>Ensure the camera is connected and allowed.</p>
+                </div>
+              ) : (
+                <>
+                  <CameraOff className="icon-large" />
+                  <p>Camera is paused. Start tracking to begin.</p>
+                </>
+              )}
               <button className="btn btn-primary" onClick={toggleCamera}>
                 <Camera size={20} />
-                Enable Camera
+                {error ? 'Retry Camera' : 'Enable Camera'}
               </button>
             </div>
           ) : (
@@ -49,6 +60,7 @@ function App() {
                 className="video-feed"
                 autoPlay
                 playsInline
+                muted
               />
               <canvas ref={canvasRef} className="overlay-canvas" />
 
