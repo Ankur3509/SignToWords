@@ -37,22 +37,28 @@ export const useSignLanguage = (videoRef, canvasRef) => {
         const canvas = canvasRef.current;
         if (!canvas || !videoRef.current) return;
 
-        // Explicitly set canvas size to match video feed
-        if (canvas.width !== videoRef.current.videoWidth) {
-            canvas.width = videoRef.current.videoWidth;
-            canvas.height = videoRef.current.videoHeight;
+        // Auto-fix canvas resolution
+        const video = videoRef.current;
+        if (video.videoWidth > 0 && (canvas.width !== video.videoWidth)) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
         }
 
         const canvasCtx = canvas.getContext('2d');
         canvasCtx.save();
         canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
 
+        // MIRROR FIX: The video is mirrored in CSS, so we must mirror the canvas context
+        // This makes sure the green skeleton aligns with the hand on screen
+        canvasCtx.translate(canvas.width, 0);
+        canvasCtx.scale(-1, 1);
+
         // Draw landmarks for VISUAL FEEDBACK
-        if (results.multiHandLandmarks) {
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
             for (const landmarks of results.multiHandLandmarks) {
                 drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS,
-                    { color: '#10b981', lineWidth: 5 });
-                drawLandmarks(canvasCtx, landmarks, { color: '#ffffff', lineWidth: 2 });
+                    { color: '#10b981', lineWidth: 4 });
+                drawLandmarks(canvasCtx, landmarks, { color: '#ffffff', lineWidth: 1, radius: 2 });
             }
         }
 
@@ -104,14 +110,14 @@ export const useSignLanguage = (videoRef, canvasRef) => {
 
         const initTracking = async () => {
             try {
-                console.log("Initializing MediaPipe Hands...");
                 hands = new Hands({
                     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
                 });
 
+                // modelComplexity 0 is faster and works better on many webcams
                 hands.setOptions({
                     maxNumHands: 1,
-                    modelComplexity: 1,
+                    modelComplexity: 0,
                     minDetectionConfidence: 0.5,
                     minTrackingConfidence: 0.5,
                 });
@@ -129,11 +135,11 @@ export const useSignLanguage = (videoRef, canvasRef) => {
                         height: 720,
                     });
 
-                    console.log("Starting Camera...");
                     await camera.start();
+                    console.log("Tracking engine started");
                 }
             } catch (err) {
-                console.error("Tracking initialization failed:", err);
+                console.error("Tracking error:", err);
                 setError(err.message);
             }
         };
